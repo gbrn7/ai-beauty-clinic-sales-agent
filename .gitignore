@@ -1,0 +1,18 @@
+# Binaries
+main
+*.exe
+*.test
+*.out
+
+# Environment and secrets
+.env
+.env.local
+
+# Databases
+*.db
+*.db-shm
+*.db-wal
+
+# Customer media files
+media/*
+!media/.gitkeep
