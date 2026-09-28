@@ -116,6 +116,11 @@ func (ts *ToolService) nextAvailableSlot(d time.Time, dateStr, after string, rul
 	m := parseTimeMinutes(after) + 30
 	m += (30 - m%30) % 30
 
+	openM := parseTimeMinutes(rules.Open)
+	if m < openM {
+		m = openM
+	}
+
 	for m <= lastValid {
 		slotTime := formatMinutes(m)
 		if ts.countOverlap(dateStr, slotTime, model.TreatmentDurationMinutes) < model.MaxConcurrent {
