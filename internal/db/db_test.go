@@ -134,6 +134,31 @@ func TestInitDB_DefaultPath(t *testing.T) {
 	}
 }
 
+func TestInitDB_ThreeSlashes(t *testing.T) {
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get wd: %v", err)
+	}
+	tmpDir := t.TempDir()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to chdir to tmpDir: %v", err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+
+	database, err := InitDB("sqlite:///clinic.db")
+	if err != nil {
+		t.Fatalf("failed to init db with sqlite:///clinic.db: %v", err)
+	}
+	sqlDB, _ := database.DB()
+	if sqlDB != nil {
+		_ = sqlDB.Close()
+	}
+
+	if _, err := os.Stat(filepath.Join(tmpDir, "clinic.db")); os.IsNotExist(err) {
+		t.Errorf("expected clinic.db created from sqlite:///clinic.db")
+	}
+}
+
 func TestModels_CRUD(t *testing.T) {
 	database, err := InitDB("sqlite://file::memory:?cache=shared")
 	if err != nil {

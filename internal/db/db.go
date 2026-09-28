@@ -18,6 +18,12 @@ func InitDB(databaseURL string) (*gorm.DB, error) {
 		dialector = postgres.Open(databaseURL)
 	} else {
 		sqlitePath := strings.TrimPrefix(databaseURL, "sqlite://")
+		if strings.HasPrefix(databaseURL, "sqlite:///") && !strings.HasPrefix(databaseURL, "sqlite:////") {
+			rest := strings.TrimPrefix(sqlitePath, "/")
+			if !strings.Contains(rest, "/") {
+				sqlitePath = rest
+			}
+		}
 		if sqlitePath == "" {
 			sqlitePath = "clinic.db"
 		}
