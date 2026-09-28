@@ -146,6 +146,38 @@ func TestDashboardHTML(t *testing.T) {
 	}
 }
 
+func TestDashboardHTML_DiskOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	origWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get wd: %v", err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to chdir to tmpDir: %v", err)
+	}
+	defer func() { _ = os.Chdir(origWd) }()
+
+	if err := os.MkdirAll("templates", 0755); err != nil {
+		t.Fatalf("failed to create templates dir: %v", err)
+	}
+	customHTML := "<html><body>Custom Dashboard Override</body></html>"
+	if err := os.WriteFile(filepath.Join("templates", "dashboard.html"), []byte(customHTML), 0644); err != nil {
+		t.Fatalf("failed to write custom dashboard: %v", err)
+	}
+
+	r, _, _ := setupTestRouter(t)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/dashboard", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Custom Dashboard Override") {
+		t.Errorf("expected disk override HTML, got %s", w.Body.String())
+	}
+}
+
 func TestWebhookEndpoint(t *testing.T) {
 	r, _, _ := setupTestRouter(t)
 
@@ -791,12 +823,5 @@ func TestDashboardBookingUpdateInvalidJSON(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 Bad Request, got %d", w.Code)
-	}
-}
-
-func init() {
-	// Ensure working directory is set appropriately for templates/dashboard.html if tests run in subdirs
-	if _, err := os.Stat("templates/dashboard.html"); os.IsNotExist(err) {
-		_ = os.Chdir("../..")
 	}
 }

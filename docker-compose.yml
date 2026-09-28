@@ -1,0 +1,44 @@
+# docker-compose.yml
+# Compatible with:  docker compose v2  •  podman compose  •  podman compose (Podman 4.x built-in)
+#
+# Usage:
+#   Docker:  docker compose up -d
+#   Podman:  podman compose up -d
+#            podman-compose up -d
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ai-sales-agent-go:latest
+
+    # Load all secrets from .env (copy .env.example → .env and fill in values)
+    env_file:
+      - .env
+
+    ports:
+      - "${PORT:-8000}:8000"
+
+    volumes:
+      # SQLite database — persists across container restarts
+      - app_data:/app/data
+      # Local media fallback (used when R2 is not configured)
+      - app_media:/app/media
+
+    environment:
+      # Override DATABASE_URL to store the file inside the persisted volume
+      DATABASE_URL: sqlite:////app/data/clinic.db
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  app_data:
+  app_media:

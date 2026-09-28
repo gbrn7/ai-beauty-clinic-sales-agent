@@ -1,0 +1,24 @@
+# --- Pre-built binaries (rebuilt inside container) ---
+bin/
+
+# --- Runtime artifacts (not needed in build context) ---
+*.db
+*.db-shm
+*.db-wal
+media/
+
+# --- Development & CI artifacts ---
+.superpowers/
+.gemini/
+*.test
+*.out
+coverage.html
+
+# --- Go test cache ---
+__debug_bin
+
+# --- OS & editor noise ---
+.DS_Store
+.env
+*.swp
+*.swo

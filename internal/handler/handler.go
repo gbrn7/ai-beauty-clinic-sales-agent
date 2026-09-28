@@ -16,6 +16,7 @@ import (
 	"github.com/raygbrn/ai-sales-agent-go/internal/model"
 	"github.com/raygbrn/ai-sales-agent-go/internal/storage"
 	"github.com/raygbrn/ai-sales-agent-go/internal/whatsapp"
+	"github.com/raygbrn/ai-sales-agent-go/templates"
 )
 
 type Dependencies struct {
@@ -86,8 +87,12 @@ func RegisterRoutes(r *gin.Engine, deps *Dependencies) {
 	r.GET("/dashboard", func(c *gin.Context) {
 		htmlBytes, err := os.ReadFile("templates/dashboard.html")
 		if err != nil {
-			c.String(http.StatusInternalServerError, "templates/dashboard.html not found")
-			return
+			if len(templates.DashboardHTML) > 0 {
+				htmlBytes = templates.DashboardHTML
+			} else {
+				c.String(http.StatusInternalServerError, "templates/dashboard.html not found")
+				return
+			}
 		}
 		c.Data(http.StatusOK, "text/html; charset=utf-8", htmlBytes)
 	})

@@ -238,3 +238,20 @@ func TestModels_CRUD(t *testing.T) {
 		t.Errorf("expected duration minutes 90, got %d", fetchedBooking.DurationMinutes)
 	}
 }
+
+func TestInitDB_SQLiteConnectionPool(t *testing.T) {
+	database, err := InitDB("sqlite://file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+	sqlDB, err := database.DB()
+	if err != nil {
+		t.Fatalf("failed to get sql.DB: %v", err)
+	}
+	defer sqlDB.Close()
+
+	stats := sqlDB.Stats()
+	if stats.MaxOpenConnections != 1 {
+		t.Errorf("expected MaxOpenConnections 1, got %d", stats.MaxOpenConnections)
+	}
+}

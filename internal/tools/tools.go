@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -14,8 +15,9 @@ import (
 var Hari = []string{"Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"}
 
 type ToolService struct {
-	db      *gorm.DB
-	NowFunc func() time.Time
+	db           *gorm.DB
+	NowFunc      func() time.Time
+	bookingMutex sync.Mutex
 }
 
 func NewToolService(database *gorm.DB) *ToolService {
@@ -239,6 +241,9 @@ func (ts *ToolService) CheckAvailableSchedule(bookingDate string) map[string]any
 }
 
 func (ts *ToolService) BookTreatment(customerName, phone, treatmentName, bookingDate, bookingTime string) map[string]any {
+	ts.bookingMutex.Lock()
+	defer ts.bookingMutex.Unlock()
+
 	d, err := time.Parse("2006-01-02", bookingDate)
 	if err != nil {
 		return map[string]any{"success": false, "error": "INVALID_DATE", "message": "Format tanggal salah. Gunakan YYYY-MM-DD"}
@@ -300,7 +305,6 @@ func (ts *ToolService) BookTreatment(customerName, phone, treatmentName, booking
 
 	// Transaction to protect capacity race
 	var booking model.Booking
-	var nextSlot *string
 	err = ts.db.Transaction(func(tx *gorm.DB) error {
 		used := 0
 		var existingBookings []model.Booking
@@ -315,7 +319,6 @@ func (ts *ToolService) BookTreatment(customerName, phone, treatmentName, booking
 		}
 
 		if used >= model.MaxConcurrent {
-			nextSlot = ts.nextAvailableSlot(d, bookingDate, bookingTime, rules)
 			return fmt.Errorf("SLOT_CONFLICT")
 		}
 
@@ -353,6 +356,7 @@ func (ts *ToolService) BookTreatment(customerName, phone, treatmentName, booking
 
 	if err != nil {
 		if err.Error() == "SLOT_CONFLICT" {
+			nextSlot := ts.nextAvailableSlot(d, bookingDate, bookingTime, rules)
 			var nextSlotVal any = nil
 			if nextSlot != nil {
 				nextSlotVal = *nextSlot

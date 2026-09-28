@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -269,5 +271,42 @@ func TestDeclarationsAndExecuteTool(t *testing.T) {
 	execUnknown := ts.ExecuteTool("unknown_tool", map[string]any{})
 	if _, ok := execUnknown["error"]; !ok {
 		t.Errorf("expected error for unknown tool, got %v", execUnknown)
+	}
+}
+
+func TestBookingConcurrentSafety(t *testing.T) {
+	ts := setupTestDB(t)
+
+	// Concurrently attempt to book 10 customers for the exact same slot (max capacity = 3)
+	const concurrentAttempts = 10
+	var wg sync.WaitGroup
+	var successCount int64
+	var conflictCount int64
+	var mu sync.Mutex
+
+	for i := 0; i < concurrentAttempts; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			name := fmt.Sprintf("User%d", id)
+			phone := fmt.Sprintf("62819999%04d", id)
+			res := ts.BookTreatment(name, phone, "Facial Acne", "2026-06-16", "10:00")
+			mu.Lock()
+			defer mu.Unlock()
+			if success, _ := res["success"].(bool); success {
+				successCount++
+			} else if errCode, _ := res["error"].(string); errCode == "SLOT_CONFLICT" {
+				conflictCount++
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	if successCount != int64(model.MaxConcurrent) {
+		t.Errorf("expected exactly %d successful bookings, got %d", model.MaxConcurrent, successCount)
+	}
+	if conflictCount != int64(concurrentAttempts-model.MaxConcurrent) {
+		t.Errorf("expected %d conflict rejections, got %d", concurrentAttempts-model.MaxConcurrent, conflictCount)
 	}
 }

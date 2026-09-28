@@ -54,3 +54,24 @@ func TestRenderSystemPrompt_FileNotFound(t *testing.T) {
 		t.Fatalf("expected error for non-existent file, got nil")
 	}
 }
+
+func TestRenderSystemPrompt_EmbeddedFallback(t *testing.T) {
+	// 1. Empty path should use embedded prompt
+	rendered1, err := RenderSystemPrompt("", "Gita", "Glowria Aesthetic Clinic")
+	if err != nil {
+		t.Fatalf("failed with empty path: %v", err)
+	}
+	if !strings.Contains(rendered1, "Gita") || strings.Contains(rendered1, "{{aiName}}") {
+		t.Errorf("rendered prompt invalid with empty path")
+	}
+
+	// 2. Default path "prompts/system.md" when not on disk should fall back to embedded prompt
+	// (Note: from internal/agent, prompts/system.md does not exist at that relative path)
+	rendered2, err := RenderSystemPrompt("prompts/system.md", "Gita", "Glowria Aesthetic Clinic")
+	if err != nil {
+		t.Fatalf("failed with default path fallback: %v", err)
+	}
+	if !strings.Contains(rendered2, "Gita") || strings.Contains(rendered2, "{{aiName}}") {
+		t.Errorf("rendered prompt invalid with default path fallback")
+	}
+}

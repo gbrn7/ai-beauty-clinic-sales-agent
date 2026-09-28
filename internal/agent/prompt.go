@@ -3,14 +3,24 @@ package agent
 import (
 	"os"
 	"strings"
+
+	"github.com/raygbrn/ai-sales-agent-go/prompts"
 )
 
 func RenderSystemPrompt(path, aiName, companyName string) (string, error) {
-	bytes, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
+	var raw string
+	if path != "" {
+		bytes, err := os.ReadFile(path)
+		if err == nil {
+			raw = string(bytes)
+		} else if path == "prompts/system.md" || path == "system.md" {
+			raw = prompts.SystemPrompt
+		} else {
+			return "", err
+		}
+	} else {
+		raw = prompts.SystemPrompt
 	}
-	raw := string(bytes)
 
 	replacements := map[string]string{
 		"{{aiName}}":      aiName,
