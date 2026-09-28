@@ -83,10 +83,6 @@ func (db *DebounceBuffer) getLock(phone string) *sync.Mutex {
 }
 
 func (db *DebounceBuffer) Add(msg *whatsapp.IncomingMessage) int {
-	lock := db.getLock(msg.Phone)
-	lock.Lock()
-	defer lock.Unlock()
-
 	db.mapMutex.Lock()
 	db.buffers[msg.Phone] = append(db.buffers[msg.Phone], msg)
 	count := len(db.buffers[msg.Phone])
