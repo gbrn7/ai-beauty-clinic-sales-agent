@@ -68,11 +68,59 @@ func TestNewAgent_Success(t *testing.T) {
 	if ag.genConfig == nil {
 		t.Fatal("expected genConfig to be non-nil")
 	}
-	if ag.genConfig.Temperature == nil || *ag.genConfig.Temperature != 0.7 {
+	if ag.genConfig.Temperature == nil || *ag.genConfig.Temperature != float32(0.7) {
 		t.Errorf("expected Temperature 0.7, got %v", ag.genConfig.Temperature)
 	}
 	if len(ag.genConfig.Tools) == 0 || len(ag.genConfig.Tools[0].FunctionDeclarations) == 0 {
 		t.Error("expected function declarations to be set in Tools")
+	}
+}
+
+func TestNewAgent_ThinkingConfig_Gemini3(t *testing.T) {
+	cfg := &config.Config{
+		GeminiAPIKey:   "test-api-key",
+		GeminiModel:    "gemini-3.1-flash-lite",
+		GeminiThinking: "low",
+		AIName:         "Gita",
+		CompanyName:    "Glowria Aesthetic Clinic",
+	}
+	ts := tools.NewToolService(nil)
+	promptPath := "../../prompts/system.md"
+
+	ag, err := NewAgent(cfg, ts, promptPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if ag.genConfig.ThinkingConfig == nil {
+		t.Fatal("expected ThinkingConfig to be set")
+	}
+	if ag.genConfig.ThinkingConfig.ThinkingLevel != genai.ThinkingLevelLow {
+		t.Errorf("expected ThinkingLevelLow, got %v", ag.genConfig.ThinkingConfig.ThinkingLevel)
+	}
+}
+
+func TestNewAgent_ThinkingConfig_Disabled(t *testing.T) {
+	cfg := &config.Config{
+		GeminiAPIKey:   "test-api-key",
+		GeminiModel:    "gemini-2.5-flash",
+		GeminiThinking: "off",
+		AIName:         "Gita",
+		CompanyName:    "Glowria Aesthetic Clinic",
+	}
+	ts := tools.NewToolService(nil)
+	promptPath := "../../prompts/system.md"
+
+	ag, err := NewAgent(cfg, ts, promptPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if ag.genConfig.ThinkingConfig == nil {
+		t.Fatal("expected ThinkingConfig to be set")
+	}
+	if ag.genConfig.ThinkingConfig.ThinkingBudget == nil || *ag.genConfig.ThinkingConfig.ThinkingBudget != 0 {
+		t.Errorf("expected ThinkingBudget 0, got %v", ag.genConfig.ThinkingConfig.ThinkingBudget)
 	}
 }
 
@@ -121,7 +169,7 @@ func TestRunAgent_SingleTurnText(t *testing.T) {
 		systemPrompt: "System instruction test",
 		tools:        ts,
 		genConfig: &genai.GenerateContentConfig{
-			Temperature: genai.Ptr(float64(0.7)),
+			Temperature: genai.Ptr(float32(0.7)),
 		},
 	}
 
@@ -383,6 +431,111 @@ func TestRunAgent_ToolExecutionLoop(t *testing.T) {
 	}
 	if contents[2].Parts[0].FunctionResponse == nil {
 		t.Errorf("expected content[2] to have FunctionResponse")
+	}
+}
+
+func TestRunAgent_PreservesThoughtSignature(t *testing.T) {
+	var callCount int32
+	var secondCallBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&callCount, 1)
+
+		if count == 1 {
+			// First call returns function call with thought signature
+			resp := map[string]any{
+				"candidates": []map[string]any{
+					{
+						"content": map[string]any{
+							"role": "model",
+							"parts": []map[string]any{
+								{
+									"thought": true,
+									"text":    "Mencari treatment acne...",
+								},
+								{
+									"functionCall": map[string]any{
+										"name": "search_treatments",
+										"args": map[string]any{
+											"query": "acne",
+										},
+									},
+									"thoughtSignature": "dGVzdC1zaWduYXR1cmU=",
+								},
+							},
+						},
+					},
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Capture second call body
+		_ = json.NewDecoder(r.Body).Decode(&secondCallBody)
+		resp := map[string]any{
+			"candidates": []map[string]any{
+				{
+					"content": map[string]any{
+						"role": "model",
+						"parts": []map[string]any{
+							{"text": "Hasil treatment acne ditemukan!"},
+						},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	mockClient, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey:      "test-key",
+		Backend:     genai.BackendGeminiAPI,
+		HTTPOptions: genai.HTTPOptions{BaseURL: server.URL},
+	})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ts := setupTestToolService(t)
+	ag := &Agent{
+		client:       mockClient,
+		model:        "gemini-3.1-flash-lite",
+		systemPrompt: "System instruction test",
+		tools:        ts,
+		genConfig:    &genai.GenerateContentConfig{},
+	}
+
+	reply, contents, err := ag.RunAgent(ctx, nil, "Ada treatment jerawat?", "081234567890", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if reply != "Hasil treatment acne ditemukan!" {
+		t.Errorf("unexpected reply: %s", reply)
+	}
+
+	// Verify thoughtSignature is preserved in contents[1].Parts[1]
+	if len(contents) < 2 {
+		t.Fatalf("expected at least 2 contents, got %d", len(contents))
+	}
+	modelContent := contents[1]
+	if len(modelContent.Parts) < 2 {
+		t.Fatalf("expected at least 2 parts in modelContent, got %d", len(modelContent.Parts))
+	}
+	fcPart := modelContent.Parts[1]
+	if len(fcPart.ThoughtSignature) == 0 {
+		t.Errorf("expected ThoughtSignature to be preserved on modelContent.Parts[1], got empty")
+	}
+
+	// Also verify that the second HTTP request received thoughtSignature in the payload
+	reqBytes, _ := json.Marshal(secondCallBody)
+	if !strings.Contains(string(reqBytes), "thoughtSignature") {
+		t.Errorf("expected second API request to contain thoughtSignature, got: %s", string(reqBytes))
 	}
 }
 

@@ -131,52 +131,82 @@ func (db *DebounceBuffer) Add(msg *IncomingMessage) int {
 
 ## 6.4 Dua Level Concurrency Lock
 
-Ini adalah desain yang elegan dan penting dipahami:
+Di dalam arsitektur konkurensi Go pada sistem ini, terdapat **dua level mutex lock** yang bekerja secara harmonis:
 
 ```
 Level 1: mapMutex (sync.Mutex)
-  - Melindungi: map buffers, map timers, map locks
-  - Durasi lock: sangat singkat (microsecond)
-  - Dipakai oleh: Add(), getLock()
-  - Tujuan: webhook harus non-blocking
+  - Yang di-lock: Variabel map Go di memori RAM (db.buffers, db.timers, db.locks)
+  - Durasi lock: Sangat singkat (mikrodetik)
+  - Dipakai oleh: Add(), getLock(), Flush(), awal processBufferedMessages()
+  - Tujuan: Mencegah fatal crash "concurrent map read and map write" di Go runtime.
 
-Level 2: phoneMutex (per nomor HP)
-  - Melindungi: pemrosesan AI untuk satu nomor HP
-  - Durasi lock: 5-30 detik (termasuk AI call)
+Level 2: phoneMutex (locks[phone] — per nomor WhatsApp)
+  - Yang di-lock: Alur eksekusi AI dan pengiriman balasan untuk satu nomor HP tertentu
+  - Durasi lock: 3-15 detik (selama Gemini AI berpikir, memanggil tool, dan mengirim WhatsApp)
   - Dipakai oleh: processBufferedMessages()
-  - Tujuan: serialisasi AI call per customer
+  - Tujuan: Menjamin hanya ada 1 agen AI yang berjalan per customer pada satu waktu.
 ```
+
+*(Catatan: Selain kedua lock ini, ada juga `bookingMutex` di `internal/tools/tools.go` yang bertugas mengunci operasi booking slot klinik agar tidak terjadi overbooking / double-booking antar customer).*
 
 ```go
 func (db *DebounceBuffer) processBufferedMessages(phone string) {
-    // Ambil lock per nomor HP
+    // 1. Ambil gembok khusus nomor HP ini
     lock := db.getLock(phone)
-    lock.Lock()         // bisa menunggu jika AI untuk phone ini masih berjalan
-    defer lock.Unlock()
+    lock.Lock()         // 🛑 Menunggu antrean jika nomor ini sedang diproses
+    defer lock.Unlock() // 🔓 Buka kunci setelah balasan selesai dikirim
 
-    // Ambil semua pesan yang di-buffer (atomic dengan mapMutex)
+    // 2. Ambil semua pesan yang sudah di-buffer (kunci mapMutex mikrodetik)
     db.mapMutex.Lock()
     pending := db.buffers[phone]
     delete(db.buffers, phone)
+    delete(db.timers, phone)
     db.mapMutex.Unlock()
 
-    // ... proses AI (bisa lama)
+    if len(pending) == 0 {
+        return
+    }
+
+    // 3. Proses pemanggilan Gemini AI dan kirim ke WhatsApp (bisa beberapa detik)
+    ...
 }
 ```
 
-**Kenapa penting:**
-```
-Skenario: Customer A kirim 3 pesan cepat, lalu kirim 3 pesan lagi saat AI masih proses
+---
 
-Tanpa phoneMutex:
-  processBufferedMessages batch-1 running...
-  processBufferedMessages batch-2 starts!  ← OVERLAP! Dua AI call bersamaan untuk orang sama
+### 🔍 Apa yang Terjadi Ketika Ada 2 Pesan Masuk dari Customer yang Sama?
 
-Dengan phoneMutex:
-  processBufferedMessages batch-1 running...
-  processBufferedMessages batch-2 menunggu di lock.Lock()
-  batch-1 selesai → batch-2 mulai  ← Berurutan, aman
-```
+Alur penanganannya terbagi menjadi **2 skenario**, tergantung **kapan** pesan kedua tiba:
+
+#### Skenario A: Pesan ke-2 Masuk Cepat (Masih dalam rentang 8 detik debounce)
+*Contoh:*
+- Detik 00: Customer kirim *"Halo kak"*
+- Detik 03: Customer kirim lagi *"Mau tanya harga treatment facial"*
+
+**Alur sistem:**
+1. Pesan ke-2 masuk ke `Add(msg)`.
+2. Pesan ke-2 dimasukkan ke array `db.buffers[phone]`.
+3. Timer 8 detik sebelumnya dihentikan (`t.Stop()`) lalu di-reset kembali 8 detik dari awal.
+4. **Hasilnya:** AI **belum berjalan sama sekali**. Kedua pesan dibundel menjadi satu: `"Halo kak\nMau tanya harga treatment facial"`, dan AI hanya dipanggil **1 kali**. Sangat hemat token dan AI langsung memahami konteks lengkap.
+
+#### Skenario B: Pesan ke-2 Masuk Saat AI SEDANG MEMPROSES Pesan ke-1 (Sedang di-Lock)
+*Contoh:*
+- Detik 00: Customer kirim pesan 1.
+- Detik 08: Timer habis. Goroutine 1 memanggil `processBufferedMessages()` dan mengeksekusi `lock.Lock()`. Gembok nomor HP terkunci. AI mulai berpikir.
+- Detik 10: Saat AI masih mengetik/berpikir, customer mengirim pesan ke-2 *"Oh ya dokternya ada siapa aja?"*.
+
+**Alur sistem:**
+1. Pesan ke-2 tetap diterima oleh server di `Add(msg)` dan ditampung ke `db.buffers[phone]` yang baru, dengan timer 8 detik baru.
+2. Ketika timer pesan ke-2 habis, Goroutine 2 memanggil `processBufferedMessages()` dan mencoba mengeksekusi `lock.Lock()`.
+3. **Pengecekan Lock:** Karena gembok nomor HP tersebut masih dipegang oleh Goroutine 1, Goroutine 2 **otomatis tertahan mengantre di `lock.Lock()`**.
+4. Begitu Goroutine 1 selesai mengirimkan balasan pesan pertama dan menjalankan `defer lock.Unlock()`:
+   - Gembok nomor HP terbuka.
+   - Goroutine 2 langsung jalan memproses pesan ke-2.
+   - AI untuk pesan ke-2 membaca riwayat chat database yang **sudah lengkap ter-update** dengan balasan pesan ke-1.
+
+**Manfaat Utama:**
+- Tidak ada balasan AI yang tumpang tindih (*race condition*).
+- Pesan customer selalu dibalas berurutan dan nyambung secara konteks.
 
 ---
 

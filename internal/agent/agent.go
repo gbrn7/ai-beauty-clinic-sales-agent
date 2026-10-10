@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"google.golang.org/genai"
@@ -59,7 +60,34 @@ func NewAgent(cfg *config.Config, ts *tools.ToolService, promptPath string) (*Ag
 		Tools: []*genai.Tool{
 			{FunctionDeclarations: ts.GetFunctionDeclarations()},
 		},
-		Temperature: genai.Ptr(float64(0.7)),
+		Temperature: genai.Ptr(float32(0.7)),
+	}
+
+	if cfg.GeminiThinking != "" {
+		lowerThinking := strings.ToLower(cfg.GeminiThinking)
+		isGemini3 := strings.Contains(cfg.GeminiModel, "gemini-3")
+		if lowerThinking == "0" || lowerThinking == "off" || lowerThinking == "none" || lowerThinking == "disabled" {
+			genConfig.ThinkingConfig = &genai.ThinkingConfig{
+				ThinkingBudget: genai.Ptr(int32(0)),
+			}
+		} else if isGemini3 {
+			var level genai.ThinkingLevel
+			switch lowerThinking {
+			case "minimal":
+				level = genai.ThinkingLevelMinimal
+			case "low":
+				level = genai.ThinkingLevelLow
+			case "medium":
+				level = genai.ThinkingLevelMedium
+			case "high":
+				level = genai.ThinkingLevelHigh
+			default:
+				level = genai.ThinkingLevelLow
+			}
+			genConfig.ThinkingConfig = &genai.ThinkingConfig{
+				ThinkingLevel: level,
+			}
+		}
 	}
 
 	return &Agent{
@@ -117,7 +145,7 @@ func (a *Agent) RunAgent(ctx context.Context, history []*genai.Content, userMess
 
 		functionCalls := resp.FunctionCalls()
 		if len(functionCalls) == 0 {
-			replyText, _ := resp.Text()
+			replyText := resp.Text()
 			if replyText == "" {
 				replyText = FallbackMessage
 			}

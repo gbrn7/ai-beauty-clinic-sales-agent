@@ -50,7 +50,8 @@ Buka file: `internal/config/config.go`
 ```go
 type Config struct {
     GeminiAPIKey    string   // Kunci API Gemini AI
-    GeminiModel     string   // Model yang dipakai, default: gemini-2.0-flash
+    GeminiModel     string   // Model yang dipakai, default: gemini-2.5-flash
+    GeminiThinking  string   // Level reasoning: low, medium, high, atau off
     DatabaseURL     string   // sqlite://clinic.db atau postgres://...
     Port            string   // Port server, default: :8000
     AIName          string   // Nama persona AI, contoh: "Sari"

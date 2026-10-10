@@ -8,6 +8,8 @@
 ## Tujuan Modul
 
 - Memahami "agentic loop" — bagaimana AI memanggil tools berulang kali
+- Mengetahui 4 argumen utama yang dikirim ke AI saat pemanggilan `GenerateContent`
+- Memahami ragam respons dari AI (Text, Tool Call, Thinking, Finish Reason) dan komparasinya antar provider
 - Mengerti cara context (tanggal, nomor HP) diinjeksikan ke setiap pesan
 - Memahami cara system prompt ditulis dan dirender
 - Memahami multimodal input (gambar dari WhatsApp)
@@ -75,7 +77,7 @@ func (a *Agent) RunAgent(ctx context.Context, history []*genai.Content,
         functionCalls := resp.FunctionCalls()
         if len(functionCalls) == 0 {
             // Tidak ada tool call → ini jawaban final
-            replyText, _ := resp.Text()
+            replyText := resp.Text()
             return replyText, contents, nil
         }
 
@@ -103,6 +105,42 @@ func (a *Agent) RunAgent(ctx context.Context, history []*genai.Content,
 }
 ```
 
+### 💡 Catatan Kritis: Thought Signatures pada Model Gemini 2.5 / 3.x
+
+Pada model Gemini generasi terbaru yang memiliki kemampuan reasoning/thinking (seperti `gemini-3.1-flash-lite` atau `gemini-2.5-flash`), saat model memutuskan memanggil tool, Gemini menyertakan token kriptografis bernama **`thought_signature`** pada part responsenya.
+
+Perhatikan baris ini di langkah 4:
+```go
+contents = append(contents, resp.Candidates[0].Content)
+```
+- **Mengapa wajib di-append utuh?** Token `thought_signature` tersimpan di dalam candidate content. Jika kita tidak menyertakannya kembali saat mengirimkan hasil tool ke Gemini, Gemini API akan menolak request dengan error:
+  `Code: 400, Message: Function call is missing a thought_signature in functionCall parts`.
+- **Dukungan SDK:** Pastikan selalu menggunakan `google.golang.org/genai v1.x` ke atas, karena struct `genai.Part` pada SDK terbaru sudah memiliki field `ThoughtSignature []byte` yang otomatis mempertahankan token ini.
+
+---
+
+### Inisialisasi Agent & Pengaturan Thinking (`NewAgent`)
+
+Selain loop eksekusi di atas, `NewAgent` mengonfigurasi parameter model seperti suhu (`Temperature`) dan tingkat berpikir (`ThinkingConfig`):
+
+```go
+genConfig := &genai.GenerateContentConfig{
+    SystemInstruction: &genai.Content{
+        Parts: []*genai.Part{{Text: sysPrompt}},
+    },
+    Tools: []*genai.Tool{
+        {FunctionDeclarations: ts.GetFunctionDeclarations()},
+    },
+    Temperature: genai.Ptr(float32(0.7)),
+}
+
+// Konfigurasi level penalaran untuk Gemini 3 (minimal, low, medium, high)
+// atau matikan budget jika diinginkan (ThinkingBudget: 0)
+if cfg.GeminiThinking != "" {
+    // ... atur ThinkingConfig sesuai GEMINI_THINKING_LEVEL di .env
+}
+```
+
 ### Visualisasi Contents (Riwayat Percakapan)
 
 ```
@@ -115,11 +153,11 @@ contents = [
     {role: "user",  parts: ["[Konteks: Senin, 28 Sep 2026. WA: 628xxx]\nMau booking facial"]}
     
     // [setelah iterasi 1]
-    {role: "model", parts: [FunctionCall{check_available_schedule}]}
+    {role: "model", parts: [FunctionCall{check_available_schedule, thoughtSignature:...}]}
     {role: "user",  parts: [FunctionResponse{slots: [...]}]}
     
     // [setelah iterasi 2]
-    {role: "model", parts: [FunctionCall{book_treatment}]}
+    {role: "model", parts: [FunctionCall{book_treatment, thoughtSignature:...}]}
     {role: "user",  parts: [FunctionResponse{success: true, ...}]}
     
     // [iterasi 3 — jawaban final]
@@ -129,7 +167,69 @@ contents = [
 
 ---
 
-## 5.3 Context Injection
+## 5.3 Anatomi Request: Apa Saja Argumen yang Dikirim ke AI?
+
+Di dalam `RunAgent`, pemanggilan Gemini dilakukan via baris:
+
+```go
+resp, err := a.client.Models.GenerateContent(ctx, a.model, contents, a.genConfig)
+```
+
+Ada **4 argumen utama** yang dikirim ke API Gemini:
+
+1. **`ctx` (`context.Context`)**
+   - Batas waktu (*timeout*) dan sinyal pembatalan request. Jika koneksi lambat atau terputus, request dibatalkan agar aplikasi tidak hang.
+
+2. **`a.model` (`string`)**
+   - Nama model AI yang digunakan (dari `.env` `GEMINI_MODEL`), contoh: `"gemini-3.1-flash-lite"` atau `"gemini-2.5-flash"`.
+
+3. **`contents` (`[]*genai.Content`)** — Riwayat & Konteks Percakapan
+   - **Histori chat:** Pesan-pesan lampau dari database (*memory window*) agar AI mengingat pembicaraan sebelumnya.
+   - **Pesan baru + Konteks:** Pesan customer yang sudah diinjeksi tanggal, jam, dan nomor HP.
+   - **Gambar (*Multimodal*):** Raw bytes foto kondisi kulit customer (jika ada).
+   - **Giliran Tool Call & Outputnya:** Riwayat `functionCall` (beserta `thoughtSignature`) dan `functionResponse` dari iterasi sebelumnya.
+
+4. **`a.genConfig` (`*genai.GenerateContentConfig`)** — Konfigurasi & Alat
+   - **`SystemInstruction`:** Manual kerja persona AI dari `prompts/system.md`.
+   - **`Tools`:** Deklarasi seluruh tool klinik (`search_treatments`, `book_treatment`, dll.) lengkap dengan deskripsi dan skema JSON parameter.
+   - **`Temperature`:** Derajat kreativitas AI (`float32(0.7)`).
+   - **`ThinkingConfig`:** Level kemampuan berpikir penalaran (misal `ThinkingLevelLow` untuk Gemini 3, atau `ThinkingBudget = 0` untuk mematikan).
+
+---
+
+## 5.4 Ragam Respons dari AI & Apakah Ini Standar di Semua AI?
+
+Setiap kali `GenerateContent` dipanggil, respons dari AI dibungkus dalam `GenerateContentResponse`. Ada **4 bentuk respons utama** yang bisa dikembalikan AI:
+
+1. **Teks Biasa (*Final Answer*):**
+   - `Part.Text` terisi, `resp.FunctionCalls()` kosong.
+   - AI langsung menjawab customer. Loop selesai.
+2. **Panggilan Alat (*Function / Tool Call*):**
+   - AI tidak membalas teks, melainkan meminta backend kita menjalankan fungsi: `Part.FunctionCall = {Name: "search_treatments", Args: {query: "acne"}}`.
+   - Backend menjalankan fungsi, lalu mengirim hasilnya kembali di iterasi berikutnya.
+3. **Proses Berpikir (*Thinking / Thought Part*):**
+   - Pada Gemini 2.5 / 3.x, AI menyertakan `thought: true` (jejak penalaran) dan `thoughtSignature` (token kriptografis penyimpan state penalaran).
+4. **Alasan Berhenti (*Finish Reason*):**
+   - `STOP`: Selesai normal.
+   - `MAX_TOKENS`: Jawaban terpotong batas panjang token.
+   - `SAFETY`: Terblokir filter keamanan SOP.
+
+### Apakah Format Respons Ini Standar di Setiap AI?
+
+Secara **konseptual**, polanya adalah **standar industri** di semua LLM modern (OpenAI, Anthropic Claude, Gemini, DeepSeek). Semua arsitektur agen AI bekerja dengan pola universal yang sama: *Teks ↔ Tool Call ↔ Hasil Tool ↔ Jawaban Akhir*.
+
+Namun secara **struktur data JSON dan SDK**, setiap provider memiliki format berbeda:
+
+| Fitur | Google Gemini | OpenAI (GPT-4o) | Anthropic Claude |
+| :--- | :--- | :--- | :--- |
+| **Bungkus Respon** | `candidates[0].content` | `choices[0].message` | `content[]` |
+| **Tool Call** | `parts[].functionCall` | `tool_calls[].function` | `{type: "tool_use", ...}` |
+| **Hasil Balikan Tool** | `functionResponse` (role: `"user"`) | role: `"tool"`, butuh `tool_call_id` | `{type: "tool_result", ...}` |
+| **Thinking** | `thought: true` + `thoughtSignature` | Internal (`reasoning_tokens`) | `{type: "thinking", signature: "..."}` |
+
+---
+
+## 5.5 Context Injection
 
 AI perlu tahu **tanggal hari ini** (untuk booking) dan **nomor HP customer** (untuk menyimpan data).
 
@@ -159,7 +259,7 @@ Halo kak, saya mau booking facial besok
 
 ---
 
-## 5.4 System Prompt — Instruksi AI
+## 5.6 System Prompt — Instruksi AI
 
 Buka file: `prompts/system.md`
 
@@ -199,7 +299,7 @@ Binary yang dikompilasi sudah mengandung `system.md` di dalamnya — bisa dijala
 
 ---
 
-## 5.5 Multimodal — Gambar dari WhatsApp
+## 5.7 Multimodal — Gambar dari WhatsApp
 
 Customer bisa mengirim foto kulit mereka, dan AI bisa melihat + menganalisis:
 
@@ -225,7 +325,7 @@ AI: [melihat gambar] "Dari foto yang kakak kirim, kulit kakak terlihat
 
 ---
 
-## 5.6 Fallback Message
+## 5.8 Fallback Message
 
 Ketika API gagal atau iterasi habis:
 
@@ -305,11 +405,17 @@ images := []agent.ImageData{{Bytes: imageBytes, MIMEType: "image/jpeg"}}
 5. Mengapa context injection (tanggal, nomor HP) dilakukan di Go, bukan di system prompt?
    (Hint: system prompt dibaca sekali saat startup, sedangkan tanggal berubah setiap hari)
 
+6. Apa yang terjadi jika token `thoughtSignature` tidak dikirimkan kembali ke Gemini saat memanggil tool pada model reasoning (Gemini 2.5 / 3.x)?
+
+7. Sebutkan 4 argumen utama yang dikirim ke `GenerateContent` dan peran masing-masing argumen tersebut!
+
 ---
 
 ## ✅ Checklist Sebelum Lanjut
 
 - [ ] Bisa menjelaskan agentic loop dengan kata-kata sendiri
+- [ ] Mengetahui 4 argumen pemanggilan `GenerateContent` (`ctx`, `model`, `contents`, `genConfig`)
+- [ ] Memahami perbedaan respons teks biasa vs function call dan pentingnya `thoughtSignature`
 - [ ] Mengerti mengapa context diinjeksikan setiap pesan
 - [ ] Berhasil menambah instruksi baru di system prompt dan melihat efeknya
 - [ ] Memahami cara embedded asset (`//go:embed`) bekerja

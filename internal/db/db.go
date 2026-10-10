@@ -40,6 +40,7 @@ func InitDB(databaseURL string) (*gorm.DB, error) {
 	if !strings.HasPrefix(databaseURL, "postgres://") && !strings.HasPrefix(databaseURL, "postgresql://") {
 		sqlDB, err := gormDB.DB()
 		if err == nil {
+			sqlDB.SetMaxOpenConns(1)
 			_, _ = sqlDB.Exec("PRAGMA journal_mode=WAL;")
 			_, _ = sqlDB.Exec("PRAGMA busy_timeout=5000;")
 		}
