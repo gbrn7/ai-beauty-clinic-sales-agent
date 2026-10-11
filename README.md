@@ -30,7 +30,18 @@ Buka browser di `http://localhost:8000/dashboard`.
 go run ./cmd/cli
 ```
 
-### 4. Menjalankan Unit Tests
+### 4. Menjalankan via Container (Docker / Podman)
+Gunakan helper script `container.sh`:
+```bash
+./container.sh up         # Jalankan Sales Agent saja
+./container.sh up:full    # Sales Agent + Evolution API
+./container.sh cli        # Mode CLI simulator di dalam container
+./container.sh down       # Hentikan semua container
+./container.sh help       # Tampilkan daftar perintah lengkap
+```
+
+### 5. Menjalankan Unit Tests
 ```bash
 go test -v ./...
 ```
+
