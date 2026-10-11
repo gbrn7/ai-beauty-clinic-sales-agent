@@ -22,7 +22,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/cli    ./cmd/cli
 # ─────────────────────────────────────────────
 # Stage 2: Runtime
 # ─────────────────────────────────────────────
-FROM alpine:3.21
+# Install curl for healthcheck
+RUN apk add --no-cache curl
 
 # Non-root user for security
 RUN addgroup -S app && adduser -S app -G app

@@ -145,38 +145,91 @@ var FS embed.FS
 Buka file: `docker-compose.yml`
 
 ```yaml
+name: ai-sales-agent-workshop
+
 services:
   app:
     build:
       context: .          # build dari Dockerfile di direktori ini
+      dockerfile: Dockerfile
     image: ai-sales-agent-go:latest
-    
-    env_file: .env        # load semua variabel dari .env
-    
+    container_name: glowria-sales-agent
     ports:
-      - "${PORT:-8000}:8000"   # host:container, default 8000
-
-    volumes:
-      # Named volumes — data tetap ada saat container restart/recreate
-      - app_data:/app/data    # clinic.db tersimpan di sini
-      - app_media:/app/media  # foto customer
-
+      - "8000:8000"
+    env_file:
+      - .env
     environment:
-      # Override DATABASE_URL agar SQLite disimpan di volume
-      DATABASE_URL: sqlite:////app/data/clinic.db
-      #             ↑ 4 slash: sqlite:// (protokol) + //app/data/clinic.db (absolute path)
-
-    restart: unless-stopped  # auto-restart kecuali di-stop manual
-
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///data/clinic.db}
+      - PORT=8000
+      - EVOLUTION_API_URL=${EVOLUTION_API_URL:-http://evolution-api:8080}
+    volumes:
+      # :z flag mengaktifkan SELinux relabeling untuk kompatibilitas Podman rootless
+      - ./data:/app/data:z
+      - ./media:/app/media:z
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
-      interval: 30s    # cek setiap 30 detik
-      timeout: 5s      # batas waktu cek
-      retries: 3       # gagal 3x berturut → unhealthy
+      test: [ "CMD-SHELL", "curl -f http://localhost:8000/ || exit 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - sales-agent-network
+
+  evolution-api:
+    image: evoapicloud/evolution-api:latest
+    container_name: glowria-evolution-api
+    profiles:
+      - full
+      - whatsapp
+    ports:
+      - "127.0.0.1:8083:8080"
+    env_file:
+      - .env
+    volumes:
+      - evolution_instances:/evolution/instances:z
+    restart: unless-stopped
+    networks:
+      - sales-agent-network
+
+  postgres:
+    image: postgres:15
+    container_name: glowria-postgres
+    profiles:
+      - postgres
+    ports:
+      - "5439:5432"
+    environment:
+      - POSTGRES_DB=clinic
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data:z
+    restart: unless-stopped
+    networks:
+      - sales-agent-network
+
+  redis:
+    container_name: glowria-redis
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - sales-agent-network
 
 volumes:
-  app_data:    # Docker/Podman manage storage ini
-  app_media:
+  evolution_instances:
+    name: glowria_evolution_instances
+  postgres_data:
+    name: glowria_postgres_data
+  redis_data:
+    name: glowria_redis_data
+
+networks:
+  sales-agent-network:
+    driver: bridge
 ```
 
 ---

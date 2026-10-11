@@ -1,44 +1,109 @@
-# docker-compose.yml
-# Compatible with:  docker compose v2  •  podman compose  •  podman compose (Podman 4.x built-in)
-#
-# Usage:
-#   Docker:  docker compose up -d
-#   Podman:  podman compose up -d
-#            podman-compose up -d
+# ==============================================================================
+# Universal Compose Specification for AI Sales Agent Workshop (Go)
+# Works seamlessly with:
+#   - Docker Compose: `docker compose up -d`
+#   - Podman Compose: `podman compose up -d` or `podman-compose up -d`
+# ==============================================================================
+
+name: ai-sales-agent-workshop
 
 services:
+  # ----------------------------------------------------------------------------
+  # Service 1: Glowria AI Sales Agent (Go, Gin, GORM, Gemini)
+  # Default service: Starts automatically without extra flags
+  # ----------------------------------------------------------------------------
   app:
     build:
       context: .
       dockerfile: Dockerfile
     image: ai-sales-agent-go:latest
-
-    # Load all secrets from .env (copy .env.example → .env and fill in values)
+    container_name: glowria-sales-agent
+    ports:
+      - "8000:8000"
     env_file:
       - .env
-
-    ports:
-      - "${PORT:-8000}:8000"
-
-    volumes:
-      # SQLite database — persists across container restarts
-      - app_data:/app/data
-      # Local media fallback (used when R2 is not configured)
-      - app_media:/app/media
-
     environment:
-      # Override DATABASE_URL to store the file inside the persisted volume
-      DATABASE_URL: sqlite:////app/data/clinic.db
-
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///data/clinic.db}
+      - PORT=8000
+      - EVOLUTION_API_URL=${EVOLUTION_API_URL:-http://evolution-api:8080}
+    volumes:
+      # :z flag enables SELinux relabeling for rootless Podman compatibility
+      - ./data:/app/data:z
+      - ./media:/app/media:z
     restart: unless-stopped
-
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
+      test: [ "CMD-SHELL", "curl -f http://localhost:8000/ || exit 1" ]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 5s
+    networks:
+      - sales-agent-network
+
+  # ----------------------------------------------------------------------------
+  # Service 2: Evolution API (WhatsApp Gateway)
+  # Optional service: Start with `--profile full` or `--profile whatsapp`
+  # ----------------------------------------------------------------------------
+  evolution-api:
+    image: evoapicloud/evolution-api:latest
+    container_name: glowria-evolution-api
+    profiles:
+      - full
+      - whatsapp
+    ports:
+      - "127.0.0.1:8083:8080"
+    env_file:
+      - .env
+    volumes:
+      - evolution_instances:/evolution/instances:z
+    restart: unless-stopped
+    networks:
+      - sales-agent-network
+
+  # ----------------------------------------------------------------------------
+  # Service 3: PostgreSQL Database (Production DB simulation)
+  # Optional service: Start with `--profile postgres`
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:15
+    container_name: glowria-postgres
+    profiles:
+      - postgres
+    ports:
+      - "5439:5432"
+    environment:
+      - POSTGRES_DB=clinic
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data:z
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d clinic" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - sales-agent-network
+
+  redis:
+    container_name: glowria-redis
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - sales-agent-network
 
 volumes:
-  app_data:
-  app_media:
+  evolution_instances:
+    name: glowria_evolution_instances
+  postgres_data:
+    name: glowria_postgres_data
+  redis_data:
+    name: glowria_redis_data
+
+networks:
+  sales-agent-network:
+    driver: bridge
