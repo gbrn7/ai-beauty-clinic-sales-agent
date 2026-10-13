@@ -16,7 +16,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ai-sales-agent-go:latest
+    image: ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG}
     container_name: glowria-sales-agent
     ports:
       - "8000:8000"
